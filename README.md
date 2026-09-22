@@ -40,6 +40,39 @@ A clustering key makes sense when three things are true: the table is large enou
   <img width="700" height="350" src=".attachments/clustering.png">
 </p>
 
+## Table Types and Views
+
+<p align="center">
+  <img width="620" height="400" src=".attachments/table_types1.png">
+</p>
+
+<p align="center">
+  <img width="650" height="200" src=".attachments/table_types2.png">
+</p>
+
+<p align="center">
+  <img width="800" height="400" src=".attachments/table_types3.png">
+</p>
+
+**Time Travel** is like a version control within snowflake. Time Travel lets you query data as it existed at any point within the retention window. In standard edition you only have 1 day of data retention, while in enterprise you have up to 90 days.
+
+**Fail-safe** is an additional layer of protection. Beyond the Time Travel window, Snowflake automatically holds your data for a further seven days in Fail-safe. You can't query it yourself during that period, but if you need it, Snowflake Support can recover it for you. This is your last resort. 
+
+
+## Functions
+
+GET_PRESIGNED_URL() generates a time-limited download link that requires no Snowflake credentials. This link can be shared with anyone so they can download the data: 
+`SELECT GET_PRESIGNED_URL(@my_stage, 'file_name.json', 3600)`
+
+
+
+
+
+
+
+
+
+
 ## Snowflake Query Execution Order
 
 | Order | Clause | Purpose |
