@@ -65,6 +65,8 @@ ACCOUNTADMIN for account-level administration, SECURITYADMIN for the security la
 
 Three grants are required to give the a role access to a table: USAGE on the database, USAGE on the schema, and SELECT on the table. The most common mistake is granting SELECT and forgetting the USAGE grants.The hierarchy enforces that every level of access is deliberate.
 
+There is an additional level of security available, column-based security, this approach uses a masking policy to show the column with the values are masked. 
+
 ## Functions
 
 GET_PRESIGNED_URL() generates a time-limited download link that requires no Snowflake credentials. This link can be shared with anyone so they can download the data: 
