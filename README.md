@@ -91,6 +91,18 @@ ACCOUNT_USAGE.LOGIN_HISTORY records every login attempt against the account - su
 
 Zero-copy cloning does not write new micro-partitions at creation time. The clone and the source share the same physical storage. Storage cost only increases as the two tables diverge.
 
+## Stages
+
+There are two types of stages: internal and external. Internal stages are managed by Snowflake. External stages point to a location on a external provider such as Amazon S3, Azure Blob Storage, or Google Cloud Storage, and let you load data from there into Snowflake tables.
+
+There are three types of internal stages: user, table and named. A user stage is a personal staging area for a single user. A table stage is tied to a specific table therefore multiple users can stage files there, but they can only load into that one table. These two types of stages are created automatically by Snowflake. A named stage is a database object created in a schema, making it shareable across roles and sessions. Similarly, an external stage can have a named stage that's location is on a cloud provider and acts as a pointer to it's external cloud location.
+
+COPY INTO is the command that moves data from a stage into a Snowflake table. The batch solution. The target is the fully qualified table name. FROM specifies the stage and path. FILE_FORMAT references the named format object. And ON_ERROR controls what happens if Snowflake encounters a bad row. This single command replaces what would otherwise be a multi-step ETL process. The data is already in the stage. COPY INTO reads it, parses it, and loads it.
+Before loading, run the same COPY INTO command with VALIDATION_MODE = RETURN_ERRORS. Snowflake parses the file and surfaces any rows that would fail, without touching the target table.
+Errors are written to the INFORMATION_SCHEMA.COPY_HISTORY table.
+
+A Snowpipe wraps a COPY INTO statement and triggers it automatically as new files arrive in a stage. Snowpipe fires each time a new file lands. Loads happen in micro-batches within minutes. And because it's serverless, there's no warehouse to provision or manage. This is the streaming solution.
+
 ## Functions
 
 GET_PRESIGNED_URL() generates a time-limited download link that requires no Snowflake credentials. This link can be shared with anyone so they can download the data: 
