@@ -67,19 +67,34 @@ Three grants are required to give the a role access to a table: USAGE on the dat
 
 There is an additional level of security available, column-based security, this approach uses a masking policy to show the column with the values are masked. 
 
+## Management & Governance
+Credits are the unit of cost. One credit equals to one hour of a Standard Gen 1 X-Small warehouse running continuously. Credit consumption depends on warehouse type and size. Credit consumption doubles when the warehouse size increases; XS consumes 1, S consumes 2 credits, M consumes 4 credits, L consumes 8 credits and so on. For example, A Large (L) warehouse consumes 8 credits per hour. if it runs for 3.5 hours it will consume 28 (8 × 3.5) credits in total, assuming it auto suspends when it finishes.
+Virtual warehouses usage is billed per second with a one-minute minimum. Cloud services layer (authentication, query optimization, metadata) are only charged if the cost is above 10% of daily warehouse compute.
+
+ACCOUNT_USAGE is a schema inside the SNOWFLAKE system database that Snowflake maintains for every account. It contains views that expose historical data: queries run, credits consumed, storage used, logins recorded etc. The data has a latency of up to three hours, so it's not suitable for real-time monitoring and most views retain data for 365 days, giving you a full year of history to query against.
+
+| Feature          | ACCOUNT_USAGE                                | INFORMATION_SCHEMA                    |
+|------------------|----------------------------------------------|---------------------------------------|
+| Scope            | History of entire account, all databases     | Current state of your database        |
+| Data latency     | Up to 3 hours                                | Low latency                           |
+| Retention        | Up to 365 days                               | Up to 6 months (varies by view)       |
+| Dropped objects  | Included                                     | Not included                          |
+| Primary use case | Historical audit and cost analysis           | Current state and metadata            |
+
+WAREHOUSE_METERING_HISTORY answers which warehouses consumed the most credits.
+
+ACCOUNT_USAGE.QUERY_HISTORY records every query run in the account - who ran it, on which warehouse, how long it took, and how much data it scanned.
+
+STORAGE_USAGE tracks how much storage the account is consuming over time - both active data storage and Fail-safe storage. The raw values are in bytes; dividing by 1024 to the power of three converts to gigabytes.
+
+ACCOUNT_USAGE.LOGIN_HISTORY records every login attempt against the account - successful or not.
+
+Zero-copy cloning does not write new micro-partitions at creation time. The clone and the source share the same physical storage. Storage cost only increases as the two tables diverge.
+
 ## Functions
 
 GET_PRESIGNED_URL() generates a time-limited download link that requires no Snowflake credentials. This link can be shared with anyone so they can download the data: 
 `SELECT GET_PRESIGNED_URL(@my_stage, 'file_name.json', 3600)`
-
-
-
-
-
-
-
-
-
 
 ## Snowflake Query Execution Order
 
@@ -96,11 +111,10 @@ GET_PRESIGNED_URL() generates a time-limited download link that requires no Snow
 | 9 | ORDER BY | Sorts the result set in ascending or descending order |
 | 10 | LIMIT | Restricts the number of rows returned |
 
-
 - **Window Functions** are calculated after SELECT but before ORDER BY
 - **QUALIFY** is used to filter results based on window function conditions.
 
-## Snowflake Query Best Practices
+## Query Best Practices
 
 ### Column Selection
 - **Avoid SELECT *** – Always specify only the columns you need to reduce data transfer and improve performance
