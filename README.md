@@ -108,6 +108,22 @@ A Snowpipe wraps a COPY INTO statement and triggers it automatically as new file
 GET_PRESIGNED_URL() generates a time-limited download link that requires no Snowflake credentials. This link can be shared with anyone so they can download the data: 
 `SELECT GET_PRESIGNED_URL(@my_stage, 'file_name.json', 3600)`
 
+### User Defined Functions 
+
+CREATE OR REPLACE FUNCTION function_name(
+    --argument argument_type, 
+    start_time TIMESTAMP
+    end_time TIMESTAMP, 
+    calories_burned NUMBER
+)
+-- Return type(eg: NUMBER)
+RETURNS NUMBER 
+AS
+$$
+-- What the function does
+DATEDIFF(MINUTE, start_time, end_time) / calories_burned
+$$;
+
 ## Snowflake Query Execution Order
 
 | Order | Clause | Purpose |
