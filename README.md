@@ -40,6 +40,39 @@ A clustering key makes sense when three things are true: the table is large enou
   <img width="700" height="350" src=".attachments/clustering.png">
 </p>
 
+
+## Caching 
+Snowflake uses three types of caches, each serving a different purpose:
+
+| Cache Type | Location | Purpose | Warehouse Required? |
+|---|---|---|---|
+| Result Cache | Cloud Services | Stores complete query results and returns them without re-executing the query. | No |
+| Warehouse Cache | Warehouse SSD and memory | Stores recently scanned data to speed up subsequent queries. | Yes |
+| Metadata Cache | Cloud Services | Stores table metadata, statistics, and row counts, allowing simple queries to be answered without scanning table data. | No |
+
+<p align="center">
+  <img width="800" height="400" src=".attachments/caching.png">
+</p>
+
+### 1. Result Cache
+- Reuses complete query results without re-executing the query.
+- Requires identical query text, unchanged underlying data, deterministic functions, available cached results, and appropriate privileges.
+- TTL: 24 hours, resetting on reuse, up to a maximum of 31 days.
+- `SELECT` requires access to underlying tables; `SHOW` requires the same role.
+
+### 2. Warehouse Cache
+- Stores recently scanned micro-partitions in warehouse SSD and memory.
+- Similar queries can reuse cached data instead of reading from cloud storage.
+- Cache is dropped when the warehouse suspends.
+- **Best practice:** Consider setting `AUTO_SUSPEND` to at least 10 minutes for frequently executed workloads.
+
+### 3. Metadata Cache
+- Always available in Cloud Services.
+- Stores table metadata, statistics, and row counts.
+- Simple queries, such as `SELECT COUNT(*)`, can sometimes be answered without scanning table data or using a warehouse.
+
+After running queries on a dashboard, Anyone with access to the dashboard and the same primary role can view the cached results.
+
 ## Table Types and Views
 
 <p align="center">
@@ -92,7 +125,6 @@ ACCOUNT_USAGE.LOGIN_HISTORY records every login attempt against the account - su
 Zero-copy cloning does not write new micro-partitions at creation time. The clone and the source share the same physical storage. Storage cost only increases as the two tables diverge.
 
 ## Stages
-
 There are two types of stages: internal and external. Internal stages are managed by Snowflake. External stages point to a location on a external provider such as Amazon S3, Azure Blob Storage, or Google Cloud Storage, and let you load data from there into Snowflake tables.
 
 There are three types of internal stages: user, table and named. A user stage is a personal staging area for a single user. A table stage is tied to a specific table therefore multiple users can stage files there, but they can only load into that one table. These two types of stages are created automatically by Snowflake. A named stage is a database object created in a schema, making it shareable across roles and sessions. Similarly, an external stage can have a named stage that's location is on a cloud provider and acts as a pointer to it's external cloud location.
@@ -103,13 +135,23 @@ Errors are written to the INFORMATION_SCHEMA.COPY_HISTORY table.
 
 A Snowpipe wraps a COPY INTO statement and triggers it automatically as new files arrive in a stage. Snowpipe fires each time a new file lands. Loads happen in micro-batches within minutes. And because it's serverless, there's no warehouse to provision or manage. This is the streaming solution.
 
+Snowflake recommends splitting data into multiple files (about 100/250 MB each) to leverage parallel loading.
+
+Any JSON file can be exploded into a relational tabular format of multiple rows and columns using the `LATERAL FLATTEN` combo. For the opposite conversion, table to JSON file, use the `OBJECT_AGG` function.
+
+List all files in a stage running `LIST @stage_name`
+
+## External Tables
+Tables that are created on the fly when snowflake reads data from any cloud provider. This process doesn't load the data into snowflake. Snowflake stores metadata of the file. As files are stored outside of snowflake, there is no storage charge associated to it. Best for infrequently queried, archive data. 
+
+## Iceberg Tables 
+Originally developed at Netflix and donated to the Apache Software Foundation. It was designed with multi-engine interoperability as a central goal.
+It is an open table format that manages parquet data files and metadata. it is highly enriched with additional features to its metadata. The key idea is that Iceberg makes files in a data lake behave much more like proper database tables, with features such as transactions, schema evolution, partition evolution and time travel.
+Databricks has its own solution; Delta tables. 
+
 ## Functions
-
-GET_PRESIGNED_URL() generates a time-limited download link that requires no Snowflake credentials. This link can be shared with anyone so they can download the data: 
-`SELECT GET_PRESIGNED_URL(@my_stage, 'file_name.json', 3600)`
-
-### User Defined Functions 
-
+### User Defined Functions
+```
 CREATE OR REPLACE FUNCTION function_name(
     --argument argument_type, 
     start_time TIMESTAMP
@@ -123,9 +165,8 @@ $$
 -- What the function does
 DATEDIFF(MINUTE, start_time, end_time) / calories_burned
 $$;
-
+```
 ## Snowflake Query Execution Order
-
 | Order | Clause | Purpose |
 |-------|--------|---------|
 | 1 | FROM | Identifies the source table(s) to query from |
@@ -139,11 +180,135 @@ $$;
 | 9 | ORDER BY | Sorts the result set in ascending or descending order |
 | 10 | LIMIT | Restricts the number of rows returned |
 
-- **Window Functions** are calculated after SELECT but before ORDER BY
-- **QUALIFY** is used to filter results based on window function conditions.
+### Window Functions
+Window Functions are calculated after SELECT but before ORDER BY. QUALIFY is used to filter results based on window function conditions.
+
+General Syntax:
+```sql
+FUNCTION(column) OVER (
+    PARTITION BY grouping_column
+    ORDER BY sorting_column
+    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+)
+```
+- PARTITION BY: Divides data into independent groups.
+- ORDER BY: Defines the sequence of rows within each group.
+- ROWS / RANGE: Defines which rows are included in the window frame.
+
+## Streams
+A stream tracks every insert, update, and delete made to a table since it was last consumed. It doesn't duplicate the data, it maintains a running change log.
+
+Snowflake has three stream types. 
+- Standard streams capture all inserts, updates, and deletes. 
+- Append-only streams track only new rows, ignoring updates and deletes. Records written once and never modified, this is more efficient. 
+- Insert-only streams are designed for external tables and directory tables. A directory table surfaces metadata about files in a stage - every file's name, size, and last modified timestamp. Since files are added but not updated in place, insert-only is the right fit.
+
+Check if a stream has data by running `SELECT SYSTEM$STREAM_HAS_DATA(‘stream_name‘)`. This returns a boolean value.
+
+## Tasks & DAG Orchestration
+A task wraps a SQL statement and runs it on a schedule, automatically. Tasks are scheduled on a using CRON syntax.
+
+DAG stands for Directed Acyclic Graph. A chain of events or sql statements running one after the other. DAGs are used to set how tasks are executed. 
+
+Streams are used in conjunction with tasks to read data in a near real time fashion and execute processes in a given order when conditions are met. 
+
+## Dynamic Tables
+A Dynamic table automatically updates its data based on a SQL query you define. Data freshness is set with the TARGET_LAG parameter. `TARGET_LAG = '10 minutes'` does not mean Snowflake refreshes exactly every 10 minutes. It is a freshness target, not a guaranteed schedule. It can be set to `DOWNSTREAM` to chain multiple tables refresh, this is useful when there are dependencies across tables.
+
+The main difference between a Dynamic Table and a Materialized View is that they both store precomputed query results, but they serve different purposes. 
+- Materialized View: Primarily improves query performance by storing the results of a query. Having clauses, window functions and complex joins are not supported.
+- Dynamic Table: Builds and maintains a transformed dataset that you can use as part of a data pipeline.
+
+Snowflake decides whether each refresh is full or incremental. 
+
+[Snowflake guide: Choosing between Dynamic Tables, Materialized Views, and Tasks](https://docs.snowflake.com/en/user-guide/dynamic-tables/decision-guide)
+
+## Query Optimization
+### Query Profile
+Query Profile in Snowflake is a visual execution plan that shows you how Snowflake executed a SQL query.
+The operator tree is a visual representation of the planned steps taken by the plan to execute the query.
+
+It helps you understand where your query spends time, which operations consume the most resources, whether Snowflake is scanning too much data, whether joins are creating performance bottlenecks.
+- Whether your query is spilling data to disk.
+- Which parts of your SQL you should optimize.
+
+**What to look when optimizing a query:**
+1. Partitions scanned vs partitions total
+
+Suppose your table contains 10,000 micro-partitions. If partitions scanned are 9,500 then your query is scanning 95% of the table. That might indicate poor micro-partition pruning.
+Ideally, Snowflake should eliminate irrelevant partitions based on your filter conditions.
+
+2. Bytes scanned
+
+This tells you how much data Snowflake had to read. High bytes scanned can indicate; 1. Reading unnecessary columns, 2. Missing or ineffective filtering, 3. Scanning a very large table.
+
+3. Spilling to local or remote storage
+
+Sometimes Snowflake doesn't have enough memory available for an operation. So it has to spill data to complete the execution. Spilling can happen during joins, sorts and aggregations.
+
+It can spill intermediate data:
+- Local spill: Uses local storage associated with the execution resources.
+- Remote spill: Uses remote storage, generally indicating more expensive processing. Must be addressed. 
+
+4. Join explosion
+
+Imagine joining two tables; Flights: 1 million rows and Customers: 100,000 rows.
+If your join condition is incorrect, the result might contain hundreds of millions of rows. Look for unexpected increases in the number of rows after a join.
+
+5. Execution time by operator
+
+Identify which operations consume the most execution time. For example, if a join accounts for 70% of the execution time, optimizing that join is probably more valuable than optimizing a small filter operation.
+
+While the query profile is used to investigate queries one by one, `SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY` tells you which queries across your whole account are the worst offenders and it retains a year of history. 
+
+| Query Profile Diagnosis | Recommended Method | Purpose |
+|---|---|---|
+| Equality lookup scans almost the entire table | Search Optimization | Accelerates selective equality lookups by efficiently finding matching rows. |
+| Heavy, unpredictable scans | Query Acceleration Service (QAS) | Offloads portions of large, scan-heavy queries to serverless compute. |
+| Same filter columns in most queries, but weak micro-partition pruning | Automatic Clustering | Reorganizes data to improve micro-partition pruning for frequently filtered columns. |
+| Same expensive aggregation executed repeatedly | Materialized View | Precomputes and stores query results to avoid repeatedly performing expensive aggregations. |
+
+## Miscellaneous knowledge
+**SEQ4** : generates a unique, increasing 4-byte integer sequence number (64-bit signed integer) for each row. For example, generating 30 days; `SELECT DATEADD(day, -SEQ4(), current_date()) AS date_actual FROM TABLE(generator(rowcount => 30)) ORDER BY date_actual DESC;`
+
+**RANGE vs ROWS** : Windows functions can be set on a set on a fixed number of rows or a more dynamic for duplicate values. - ROWS defines the window based on the physical number of rows, while RANGE defines the window based on the values of the ORDER BY column. For example; `ROWS BETWEEN 2 PRECEDING AND CURRENT ROW` Includes the current row and the 2 previous physical rows, regardless of their values. While `RANGE BETWEEN 2 PRECEDING AND CURRENT ROW` Includes all rows whose ORDER BY value falls within the range of 2 units before the current value, including the current value, regardless of the number of rows with that same value.
+
+It is commonly used to generate row numbers, create test data, and generate sequences of dates or numbers.
+**GET_PRESIGNED_URL**: This function generates a time-limited download link that requires no Snowflake credentials. This link can be shared with anyone so they can download the data: 
+`SELECT GET_PRESIGNED_URL(@my_stage, 'file_name.json', 3600)`
+
+**PARSE_JSON**: creates a VARIANT value from a valid JSON string.
+
+**ARRAY_SIZE** function to count number of elements in an ARRAY. For example; `SELECT ARRAY_SIZE(v:children) AS total_children FROM my_json;`
+
+**OBJECT_AGG**: Aggregate function that combines multiple rows into a single OBJECT (JSON-like key-value structure). It is an aggregate function so you need to group by another column. `ARRAY_AGG` is a similar function that returns an array instead of a json. 
+
+**SPLIT_TO_TABLE**: splits a string into multiple rows using a specified delimiter. Unlike `SPLIT()`, which returns an ARRAY, `SPLIT_TO_TABLE()` returns a table with one row per element. To get a table as a result, you should use `LATERAL` as well.
+
+**CONCAT vs CONCAT_WS**: `CONCAT()` combines strings directly and returns NULL if any input value is NULL, whereas `CONCAT_WS()` combines strings using a specified separator and automatically skips NULL values, making it more useful for creating delimited strings such as names or addresses. Avoid `CONCAT_WS` for primary keys as it wont raise errors if there are nulls.
+
+**TABLESAMPLE** Also called `SAMPLE()`, is used to randomly select a subset of rows from a table without querying the entire dataset. similar to LIMIT. SEED() function is used to make sample reproducible. `SELECT *
+FROM FLIGHTS SAMPLE (10) SEED (42);`
+
+**HASH_AGG** : Calculates a single hash value representing a collection of rows. It is particularly useful for; detecting whether data has changed between two tables, comparing datasets without comparing every row individually, data quality checks, monitoring changes in ETL pipelines.
+
+**RegEx** The function `REGEXP_LIKE()` whether a string matches a specified regular expression (regex) pattern. It returns a TRUE, FALSE or NULL. `SELECT REGEXP_LIKE('12345', '[0-9]+')`
+
+**AVG()** Average function does not take nulls into account, i.e. NULLS are ignored. 
+
+**Nulls** Use IS NULL to check for NULL values. Also, NULL = NULL is False.
+
+**Correlated Subqueries** A correlated subquery references the outer query's columns and is evaluated for each row of the outer query. These are the queries in `LATERAL FLATTEN`.
+
+**GROUPING SETS** Allows you to calculate multiple levels of aggregation in a single `GROUP BY` query, instead of writing multiple queries using `UNION ALL`.
+```sql
+SELECT country, city, SUM(sales) AS total_sales
+FROM sales
+GROUP BY GROUPING SETS ((country, city), (country), ());
+```
+
 
 ## Query Best Practices
-
 ### Column Selection
 - **Avoid SELECT *** – Always specify only the columns you need to reduce data transfer and improve performance
 - **Select relevant columns** – Unnecessary columns increase I/O and processing time
@@ -164,7 +329,7 @@ $$;
 - **Avoid multiple passes** – Consolidate logic to avoid scanning tables multiple times
 
 ### Joins & Relationships
-- **Use appropriate JOIN types** – Only use INNER, LEFT, RIGHT, or FULL as needed
+- **Use appropriate JOIN types** – Only use INNER, LEFT, RIGHT, or FULL as needed. Always use explicit `JOIN` statements with appropriate `ON` conditions; don't list multiple tables in `FROM` without a join condition. A NATURAL JOIN automatically joins two tables using all columns that have the same name in both tables. It doesn't require a join condition set with the ON clause. It returns a similar output as an INNER JOIN, it should not be used in production 
 - **Join on indexed/clustered columns** – Improves join performance
 - **Avoid self-joins when possible** – Use window functions as an alternative
 - **Filter before joining** – Reduce dataset size before performing joins
@@ -208,3 +373,18 @@ $$;
 - ❌ Querying without LIMIT during exploration
 - ❌ Joining before filtering
 - ❌ Ignoring query execution plans
+
+## Statistics & Analytics Functions
+
+**Standard Deviation** 
+`STDDEV()` aka `STDDEV_SAMP()`, calculates the standard deviation of a set of numerical values. It measures how spread out the values are around their average (mean). Utilizes the sample to get the square root of the sample variance.
+
+**Correlation** Calculated using the `CORR()` function. It calculates the Pearson correlation coefficient between two numeric columns. `REGR_SLOPE()` calculates the slope of the best-fit line.
+
+**Rolling Average/Sum** Rolling averages/sum are created using LAG function along with a dynamic window function. For example, a 3 days rolling average would be: 
+```
+SELECT 
+region_id, sales_date, sales_amt,
+AVG(sales_amt) OVER (PARTITION BY region_id ORDER BY sales_date RANGE BETWEEN 2 PRECEDING AND CURRENT ROW) AS rolling_avg 
+FROM sales;
+```
